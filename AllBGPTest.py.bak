@@ -1,0 +1,189 @@
+import unittest
+import sys
+#from SimBGP.simbgp import SimBGP
+import SimBGP
+
+class AllBGPTest(unittest.TestCase):
+    """Test for normal BGP behaviour on topology files, for all BGP mode"""
+    def setUp(self):
+        self.bgp_modes=['BGP_NORMAL','ADD2PATHS','ADD4PATHS','BEST_EXTERNAL', 'ADD_ALL_PATHS','BEST_BIN']
+
+    def tearDown(self):
+        SimBGP.init()
+    def testPrefixAdvertisement(self):
+        """Testing simple topology without filters (Check that all routers have at least one path)"""
+        for mode in self.bgp_modes : 
+            SimBGP.init()
+            #SimBGP.readConfigFile("../../config/plain_bgp_base_topo.cfg")
+            SimBGP.readConfigFile("plain_bgp_base_topo.cfg")
+            SimBGP.BGPModeAllRouters(mode)
+            SimBGP.computeIGP()
+            SimBGP.run()
+            for router in SimBGP._router_list : 
+                self.failIfEqual(len(SimBGP._router_list[router].loc_rib["2.0/8"]),0)
+    def testPrefixWithdrawal(self):
+        """Testing that prefix are unreachable by all routers after prefix withdrawal"""
+        #Same as above.  Withdraw prefix after some time, and check that no one has a path
+        for mode in self.bgp_modes : 
+            SimBGP.init()
+            #SimBGP.readConfigFile("../../config/plain_bgp_base_topo.cfg")
+            SimBGP.readConfigFile("plain_bgp_base_topo.cfg")
+            SimBGP.BGPModeAllRouters(mode)
+            SimBGP.computeIGP()
+            SimBGP.run()
+
+            for router in SimBGP._router_list : 
+                self.failIfEqual(len(SimBGP._router_list[router].loc_rib["2.0/8"]),0)
+            SimBGP._event_Scheduler.add(SimBGP.CEvent(SimBGP._systime, ["2.1", "2.0/8"], SimBGP.EVENT_WITHDRAW_PREFIX))
+            SimBGP.run()
+            for router in SimBGP._router_list : 
+                try : 
+                    self.assertEqual(len(SimBGP._router_list[router].loc_rib["2.0/8"]), 0)
+                except : 
+                    print "Assertion failed with router", router, "in mode", mode
+                    raise
+    def testASPaths(self) :
+        """Testing that the AS path is correctly handled"""
+        for mode in self.bgp_modes : 
+            SimBGP.init()
+            #SimBGP.readConfigFile("../../config/topo-as-paths.cfg")
+            SimBGP.readConfigFile("topo-as-paths.cfg")
+            SimBGP.BGPModeAllRouters(mode)
+            SimBGP.computeIGP()
+            SimBGP.run()
+            self.assertEqual(len(SimBGP._router_list["1.1"].loc_rib["1.0/8"]), 1)
+            path=SimBGP._router_list["1.1"].loc_rib["1.0/8"][0]
+            self.assertEqual(path.aspath, [])
+            self.assertEqual(len(SimBGP._router_list["2.1"].loc_rib["1.0/8"]), 1)
+            path=SimBGP._router_list["2.1"].loc_rib["1.0/8"][0]
+            self.assertEqual(path.aspath, [1])
+            self.assertEqual(len(SimBGP._router_list["3.1"].loc_rib["1.0/8"]), 1)
+            path=SimBGP._router_list["3.1"].loc_rib["1.0/8"][0]
+            self.assertEqual(path.aspath, [2,1])
+            self.assertEqual(len(SimBGP._router_list["4.1"].loc_rib["1.0/8"]), 1)
+            path=SimBGP._router_list["4.1"].loc_rib["1.0/8"][0]
+            self.assertEqual(path.aspath, [3,2,1])
+
+    def testFilters(self):
+        """Testing that filters are applied in all modes.  Classical business relationships are used"""
+        for mode in self.bgp_modes :
+            SimBGP.init()
+            #SimBGP.readConfigFile("../../config/topo-business-rel.cfg")
+            SimBGP.readConfigFile("topo-business-rel.cfg")
+            SimBGP.BGPModeAllRouters(mode)
+            SimBGP.computeIGP()
+            SimBGP.run()
+            #Check that everyone receives the customer prefix
+            for router in SimBGP._router_list : 
+                try : 
+            	    self.assertEqual(len(SimBGP._router_list[router].loc_rib["4.0/8"]), 1)
+                except:
+            	    print("Pbm with router %s\n"  %router)
+            	    raise
+            #Check that peer and provider prefixes are only  known by AS 1 and AS4
+            self.assertEqual(len(SimBGP._router_list["1.0.0.1"].loc_rib["2.0/8"]), 1)
+            self.assertEqual(len(SimBGP._router_list["1.0.0.2"].loc_rib["2.0/8"]), 1)
+            self.assertEqual(len(SimBGP._router_list["1.0.0.3"].loc_rib["2.0/8"]), 1)
+            self.assertEqual(len(SimBGP._router_list["4.0.0.1"].loc_rib["2.0/8"]), 1)
+            self.assertEqual(len(SimBGP._router_list["1.0.0.1"].loc_rib["3.0/8"]), 1)
+            self.assertEqual(len(SimBGP._router_list["1.0.0.2"].loc_rib["3.0/8"]), 1)
+            self.assertEqual(len(SimBGP._router_list["1.0.0.3"].loc_rib["3.0/8"]), 1)
+            self.assertEqual(len(SimBGP._router_list["4.0.0.1"].loc_rib["3.0/8"]), 1)
+            
+            #Check that customer prefixes are prefered over others
+            for router in SimBGP._router_list : 
+             	if SimBGP._router_list[router].asn=="1" :
+                    aspath=SimBGP._router_list[router].loc_rib["1.0/8"][0].aspath
+                    self.assertEqual(aspath[0],"4")
+          
+            #Check that peer prefixes are prefered over provider's
+            for router in SimBGP._router_list : 
+                #Local AS and customer : prefix is known
+                if SimBGP._router_list[router].asn=="1" or SimBGP._router_list[router].asn=="4" :
+                    self.assertEqual(len(SimBGP._router_list[router].loc_rib["5.0/8"]), 1)
+                    aspath=SimBGP._router_list[router].loc_rib["1.0/8"][0].aspath
+                    self.assertEqual(aspath[-1],"3")
+                #Peer and Provider : No pref in locrib (peer because pref is local)
+                if SimBGP._router_list[router].asn=="2" or SimBGP._router_list[router].asn=="3" :
+                    self.assertEqual(len(SimBGP._router_list[router].loc_rib["5.0/8"]), 0)
+
+    def testeBGPoveriBGP(self) :
+        for mode in self.bgp_modes :
+            SimBGP.init()
+            #SimBGP.readConfigFile("../../config/plain_bgp_eBGP_over_iBGP.cfg")
+            SimBGP.readConfigFile("plain_bgp_eBGP_over_iBGP.cfg")
+            SimBGP.BGPModeAllRouters(mode)
+            SimBGP.computeIGP()
+            SimBGP.run()
+            #Check that both routers prefers the path via AS2
+            self.assertEqual(SimBGP._router_list["0.0.0.1"].loc_rib["2.0/8"][0].src_pid, "0.2.0.0")
+            self.assertEqual(SimBGP._router_list["0.0.0.0"].loc_rib["2.0/8"][0].src_pid, "0.2.0.0")
+            #SimBGP.SHOW_FINAL_RIBS=False
+            
+    def testHotPotato(self):
+        for mode in self.bgp_modes :
+            SimBGP.init()
+            #SimBGP.readConfigFile("../../config/plain_hot_potato.cfg")
+            SimBGP.readConfigFile("plain_hot_potato.cfg")
+            SimBGP.BGPModeAllRouters(mode)
+            SimBGP.computeIGP()
+            SimBGP.run()
+            #Check that each router closest nexthop
+            self.assertEqual(SimBGP._router_list["0.0.0.2"].loc_rib["1.0/8"][0].src_pid, "0.0.0.0")
+            self.assertEqual(SimBGP._router_list["0.0.0.1"].loc_rib["1.0/8"][0].src_pid, "0.0.0.0")
+            #Check that each receiving router prefers eBGP path
+            self.assertEqual(SimBGP._router_list["0.0.0.3"].loc_rib["1.0/8"][0].src_pid, "1.0.0.0")
+            self.assertEqual(SimBGP._router_list["0.0.0.0"].loc_rib["1.0/8"][0].src_pid, "2.0.0.0")
+
+            
+            
+    def testPreferLocalPath(self) : 
+        """Check that the locally originated path is preferred"""
+        for mode in self.bgp_modes :
+            SimBGP.init()
+            #SimBGP.readConfigFile("../../config/plain_local.cfg")
+            SimBGP.readConfigFile("plain_local.cfg")
+            SimBGP.BGPModeAllRouters(mode)
+            SimBGP.computeIGP()
+            SimBGP.run()
+            #Check that each router prefers path via itself
+            self.assertEqual(SimBGP._router_list["0.0.0.0"].loc_rib["1.0/8"][0].src_pid, None)
+            self.assertEqual(SimBGP._router_list["0.0.0.1"].loc_rib["1.0/8"][0].src_pid, None)
+            #Check that path is received from other peer
+            self.assertEqual(len(SimBGP._router_list["0.0.0.0"].peers["0.0.0.1"].rib_in["1.0/8"]), 1)
+            self.assertEqual(len(SimBGP._router_list["0.0.0.1"].peers["0.0.0.0"].rib_in["1.0/8"]), 1)
+            
+            
+    def testLinkDown(self) : 
+        """Checking behaviour when an IGP link is down"""
+        for mode in self.bgp_modes :
+            SimBGP.init()
+            #SimBGP.readConfigFile("../../config/plain_hot_potato.cfg")
+            SimBGP.readConfigFile("plain_hot_potato.cfg")
+            SimBGP.BGPModeAllRouters(mode)
+            SimBGP.computeIGP()
+            SimBGP.run()
+            self.assertEqual(SimBGP.getRouterLink("0.0.0.1", "0.0.0.2").reach, SimBGP.PEER_REACH)
+            #Check that each router prefers path via itself
+            self.assertEqual(SimBGP._router_list["0.0.0.2"].loc_rib["1.0/8"][0].src_pid, "0.0.0.0")
+            self.assertEqual(SimBGP._router_list["0.0.0.1"].loc_rib["1.0/8"][0].src_pid, "0.0.0.0")
+            #Check that each receiving router prefers eBGP path
+            self.assertEqual(SimBGP._router_list["0.0.0.3"].loc_rib["1.0/8"][0].src_pid, "1.0.0.0")
+            self.assertEqual(SimBGP._router_list["0.0.0.0"].loc_rib["1.0/8"][0].src_pid, "2.0.0.0")
+            #Link down
+            SimBGP._event_Scheduler.add(SimBGP.CEvent(SimBGP.toSystemTime(10.0), ["0.0.0.1", "0.0.0.2"], SimBGP.EVENT_LINK_DOWN))
+            SimBGP.run()
+            self.assertEqual(SimBGP.getRouterLink("0.0.0.1", "0.0.0.2").reach, SimBGP.PEER_UNREACH)
+            self.assertEqual(SimBGP._router_list["0.0.0.2"].loc_rib["1.0/8"][0].src_pid, "0.0.0.3")
+            self.assertEqual(SimBGP._router_list["0.0.0.1"].loc_rib["1.0/8"][0].src_pid, "0.0.0.0")
+            #Check that each receiving router prefers eBGP path
+            self.assertEqual(SimBGP._router_list["0.0.0.3"].loc_rib["1.0/8"][0].src_pid, "1.0.0.0")
+            self.assertEqual(SimBGP._router_list["0.0.0.0"].loc_rib["1.0/8"][0].src_pid, "2.0.0.0")
+            #Check Link Up
+            SimBGP._event_Scheduler.add(SimBGP.CEvent(SimBGP.toSystemTime(11.0), ["0.0.0.1", "0.0.0.2"], SimBGP.EVENT_LINK_UP))
+            SimBGP.run()
+            self.assertTrue(SimBGP._igp_graph.isReachableFrom("0.0.0.1", "0.0.0.2"))
+            self.assertEqual(SimBGP.getRouterLink("0.0.0.1", "0.0.0.2").reach, SimBGP.PEER_REACH)
+            self.assertEqual(SimBGP._router_list["0.0.0.2"].loc_rib["1.0/8"][0].src_pid, "0.0.0.0")
+            self.assertEqual(SimBGP._router_list["0.0.0.1"].loc_rib["1.0/8"][0].src_pid, "0.0.0.0")
+        
