@@ -1,0 +1,9 @@
+! IGP Config
+{% for node, domain in graph_dict.items() %}
+node {{ node }} domain {{ domain }}
+{%- endfor %}
+{% for edge in edges %}
+link {{ edge.start }} {{ edge.end }} cost {{ edge.weight }} 
+{%- endfor %}
+
+

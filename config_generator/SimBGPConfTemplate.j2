@@ -1,0 +1,17 @@
+! IGP Config
+{% for node, domain in graph_dict.items() %}
+node {{ node }} domain {{ domain }}
+{%- endfor %}
+{% for edge in edges %}
+link {{ edge[0] }} {{ edge[1] }} cost {{ edge[2] }} 
+{%- endfor %}
+
+{%- for node, domain in graph_dict.items() %}
+
+router bgp {{ domain }}
+ bgp router-id {{ node }}
+ {%- for peering in neighbors[node] %}
+ neighbor {{ peering[0] }} remote-as {{ peering[1] }}
+ {%- endfor -%}
+{%- endfor %}
+
